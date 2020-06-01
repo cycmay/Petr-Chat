@@ -96,7 +96,7 @@ int server_init(int server_port) {
     return sockfd;
 }
 
-void _send_msg(int clientfd, enum msg_types type, char *body){
+int _send_msg(int clientfd, enum msg_types type, char *body){
     // send message OK
 
     petr_header *return_header = (petr_header *)malloc(sizeof(petr_header));
@@ -114,6 +114,7 @@ void _send_msg(int clientfd, enum msg_types type, char *body){
         debug("Send the type[%d] message[%s] back to client[%d]\n", type, body, clientfd);
     }
     free(return_header);
+    return ret;
     
 }
 
@@ -137,33 +138,9 @@ void login(MessageData * msg){
 }
 
 void logout(MessageData * msg){
-    
-    Client * client = FindClient(UserList ,msg->clientfd);
-    // remove all room created by the client
-    Room * roomPCur = RoomList->next;
-    while(roomPCur != NULL){
-         // send closed room message to all users in this room 
-        Client * usersList = roomPCur->usersList;
-        pClient pCur = usersList->next;
-
-        while (pCur != NULL){
-            if(strcmp(pCur->userName, client->userName)==0){
-                
-            }else{
-                _send_msg(pCur->sClient, RMCLOSED, roomPCur->roomName);
-                info("send RMCLOSED to user[%s]\n", pCur->userName);
-            }
-            pCur = pCur->next;
-        }
-        // remove room in List
-        RemoveRoom(RoomList, roomPCur->roomName);
-        roomPCur = roomPCur->next;
-    }
-    
-    // remove from user list
-    RemoveClient(UserList, client->userName);
+    removeClientBySystem(msg->clientfd);
     _send_msg(msg->clientfd, OK, "");
-    debug("remove user[%s]\n", client->userName);
+    debug("remove user[%d]\n", msg->clientfd);
     // close socket
     close(msg->clientfd);  
 }
@@ -202,6 +179,7 @@ void listUsers(MessageData *msg){
 // message:
 // <to_username>\r\n<message>
 void userSend(MessageData * msg){
+
     char * msg_buff;
 
     char * to_username = strtok_r(msg->mText, SPETATOR, &msg_buff);
@@ -213,17 +191,22 @@ void userSend(MessageData * msg){
     int retClientFd = FindClientByName(to_username);
     if(retClientFd < 0){
         info("NO user named %s \n", to_username);
-        _send_msg(client->sClient, ERMNOTFOUND, "USER NOT FOUND");
+        _send_msg(client->sClient, ERMNOTFOUND, "");
         return;
     }else{
+        char response[BUFFER_SIZE];
+        bzero(response, BUFFER_SIZE);
+
         Client * toClient = FindClient(UserList ,retClientFd);
 
         // build message
-        char *response = strcat(strcat(client->userName, SPETATOR), content);
+        strcat(response, client->userName);
+        strcat(response, SPETATOR);
+        strcat(response, content);
 
         // send Message to username
         _send_msg(toClient->sClient, USRRECV, response);    
-        info("Send msg[%s] from [%s] to [%s]\n", content, client->userName, to_username);
+        info("Send msg[%s] from [%s] to [%s]\n", response, client->userName, to_username);
     }
     
 
@@ -367,12 +350,21 @@ void roomSend(MessageData * msg){
     }else{
         // send message to all users in the room
         Client * pCur = room->usersList->next;
+        // wrapper response  
+        char response[BUFFER_SIZE];
+        bzero(response, BUFFER_SIZE);
+        // <roomname>\r\n<from_username>\r\n<message>
+        strcat(response, to_roomName);
+        strcat(response, SPETATOR);
+        strcat(response, client->userName);
+        strcat(response, SPETATOR);
+        strcat(response, content);
         while(NULL != pCur){
             if(strcmp(pCur->userName, client->userName) == 0){
                
             }else{
                 _send_msg(pCur->sClient, RMRECV, content);
-                info("Send Room msg[%s] from [%s] to [%s]\n", content, client->userName, pCur->userName);
+                info("Send Room msg[%s] from [%s] to [%s]\n", response, client->userName, pCur->userName);
             }
             pCur = pCur->next;
         } 
@@ -469,14 +461,6 @@ void *process_client(void *clientfd_ptr) {
 
     int retval;
 
-    // // //创建一个新的客户端对象
-    // Client newClient;
-    // pClient pclient = &newClient;
-    // // pClient pclient = (pClient)malloc(sizeof(Client));
-    // debug("new client: %p\n", pclient);
-    // pclient->sClient = client_fd;
-    // pclient->flag = pclient->sClient; //不同的socke有不同UINT_PTR类型的数字来标识
-
     while (1) {
         FD_ZERO(&read_fds);
         FD_SET(client_fd, &read_fds);
@@ -492,13 +476,20 @@ void *process_client(void *clientfd_ptr) {
         received_size = read(client_fd, buffer, sizeof(buffer));
         if (received_size < 0) {
             printf("Receiving failed\n");
+            pthread_mutex_unlock(&buffer_lock);
             break;
         } else if (received_size == 0) {
-            continue;
+            // system close this client gracefully
+            Client * pclient = FindClient(UserList, client_fd);
+            info("Disconnect from UserName: %s\n", pclient->userName);
+            removeClientBySystem(pclient->sClient);
+            pthread_mutex_unlock(&buffer_lock);
+            break;
         }
 
         if (strncmp(exit_str, buffer, sizeof(exit_str)) == 0) {
             printf("Client exit\n");
+            pthread_mutex_unlock(&buffer_lock);
             break;
         }
         total_num_msg++;
@@ -536,6 +527,83 @@ void *process_client(void *clientfd_ptr) {
     return NULL;
 }
 
+// manage collection
+void *manageCollection(void *params){
+
+    info("created a new thread: pid %u tid %u (0x%x)\n",
+        (unsigned int) getpid(), (unsigned int)pthread_self(), (unsigned int)pthread_self());
+
+    free(params);
+    while (1)
+    {
+        CheckConnection();  //检查连接状况
+        sleep(2);        //2s检查一次
+    }
+    return 0;
+}
+
+// 系统删除用户信息
+void removeClientBySystem(int clientfd){
+    Client * client = FindClient(UserList, clientfd);
+    // remove all room created by the client
+    Room * roomPCur = RoomList->next;
+    while(roomPCur != NULL){
+         // send closed room message to all users in this room 
+        Client * usersList = roomPCur->usersList;
+        pClient pCur = usersList->next;
+
+        while (pCur != NULL){
+            if(strcmp(pCur->userName, client->userName)==0){
+                
+            }else{
+                _send_msg(pCur->sClient, RMCLOSED, roomPCur->roomName);
+                info("send RMCLOSED to user[%s]\n", pCur->userName);
+            }
+            pCur = pCur->next;
+        }
+        info("Room [%s] removed which created by user [%s]\n", roomPCur->roomName, client->userName);
+        // remove room in List
+        RemoveRoom(RoomList, roomPCur->roomName);
+        roomPCur = roomPCur->next;
+    }
+    // remove user in UserList
+    info("User [%s] removed from UserList\n", client->userName);
+    RemoveClient(UserList, client->userName);
+}
+
+/*
+* function 检查连接状态并关闭一个连接
+* return 返回值
+*/
+void CheckConnection()
+{
+    debug("CheckConnection\n");
+    pClient pclient = GetUserListNode();
+    pclient = pclient->next;
+    while (pclient != NULL)
+    {
+        if (_send_msg(pclient->sClient, OK, "") < 0)
+        {
+            info("Disconnect from UserName: %s\n", pclient->userName);
+            if (pclient->sClient != 0)
+            {
+                info("Disconnect from UserName: %s\n", pclient->userName);
+                // char error[128] = { 0 };   //发送下线消息给发消息的人
+                // sprintf(error, "The %s was downline.\n", pclient->userName);
+                // send(FindClient(pclient->ChatName), error, sizeof(error), 0);
+                removeClientBySystem(pclient->sClient);
+                // close socket
+                close(pclient->sClient);
+                break;
+            }
+        }else{
+            info("continue connected from UserName: %s\n", pclient->userName);
+        }
+        pclient = pclient->next;
+    }
+}
+
+
 
 
 void run_server(int server_port, int jobNum) {
@@ -564,11 +632,15 @@ void run_server(int server_port, int jobNum) {
     // room list head initialize
     RoomList = (Room *)malloc(sizeof(Room));
 
-    Init(); //初始化一定不要再while里面做，否则head会一直为NULL！！！
+
+    // initial UserList
+    Init();
+    // initial RoomList
     InitRoomList(RoomList);
     for(int i = 0; i < jobNum; ++i){
         pthread_create(&tid, &attr, process_Agent, NULL);
     }
+
 
     while (1) {
         // Wait and Accept the connection from client

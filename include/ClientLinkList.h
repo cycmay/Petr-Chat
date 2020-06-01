@@ -39,7 +39,7 @@ void initClientList(Client * root);
 * function  获取头节点
 * return    返回头节点
 */
-pClient GetHeadNode();
+pClient GetUserListNode();
 
 /*
 * function	添加一个客户端

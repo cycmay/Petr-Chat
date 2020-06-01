@@ -132,31 +132,6 @@ void ClearClientList(Client * root)
 	}
 }
 
-/*
-* function 检查连接状态并关闭一个连接
-* return 返回值
-*/
-void CheckConnection()
-{
-	// pClient pclient = GetUserListNode();
-	// while (pclient != NULL)
-	// {
-	// 	if (send(pclient->sClient, "", sizeof(""), 0) == -1)
-	// 	{
-	// 		if (pclient->sClient != 0)
-	// 		{
-	// 			printf("Disconnect from IP: %s,UserName: %s\n", pclient->IP, pclient->userName);
-	// 			char error[128] = { 0 };   //发送下线消息给发消息的人
-	// 			sprintf(error, "The %s was downline.\n", pclient->userName);
-	// 			send(FindClient(pclient->ChatName), error, sizeof(error), 0);
-	// 			closesocket(pclient->sClient);   //这里简单的判断：若发送消息失败，则认为连接中断(其原因有多种)，关闭该套接字
-	// 			RemoveClient(pclient->flag);
-	// 			break;
-	// 		}
-	// 	}
-	// 	pclient = pclient->next;
-	// }
-}
 
 /*
 * function  指定发送给哪个客户端

@@ -43,5 +43,7 @@ typedef struct MessageData{
 
 // share structure message queue
 void run_server(int server_port, int jobNum);
-void _send_msg(int clientfd, enum msg_types type, char *body);
+int _send_msg(int clientfd, enum msg_types type, char *body);
+// 系统删除用户信息
+void removeClientBySystem(int clientfd);
 #endif
