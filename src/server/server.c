@@ -1,10 +1,11 @@
-#define DEBUG
+#define _DEBUG
 
 #include "server.h"
 #include "debug.h"
 #include "protocol.h"
 #include "ClientLinkList.h"
 #include "RoomLinkList.h"
+#include "log.h"
 
 # include <semaphore.h>
 #include <pthread.h>
@@ -36,7 +37,7 @@ Room * RoomList;
 int insert_item(MessageData item) {
     /* insert item into MessageQueue */
     MessageQueue[out] = item;
-    out = (out + 1) % BUFFER_SIZE;
+    out = (out + 1) % QUEUE_SIZE;
     return 0;
 }
 
@@ -44,7 +45,8 @@ int insert_item(MessageData item) {
 int remove_item(MessageData *item) {
     /* remove an object from MessageQueue and then place it in item */
     *item = MessageQueue[in];
-    in = (in + 1) % BUFFER_SIZE;
+    in = (in + 1) % QUEUE_SIZE;
+
     return 0;   
 }
 
@@ -106,7 +108,8 @@ int _send_msg(int clientfd, enum msg_types type, char *body){
     return_header->msg_len = strlen(body);
 
     int ret = wr_msg(clientfd, return_header, body);
-    
+
+    LogWrite(INFO, "Send message [%s] to client [%d]", body, clientfd);
 
     if (ret < 0) {
         error("Sending failed\n");
@@ -129,11 +132,13 @@ void login(MessageData * msg){
         client->flag = msg->clientfd;
         client->sClient = msg->clientfd;
         AddClient(UserList, client);
+        LogWrite(INFO, "Add User named [%s]", username);
         _send_msg(msg->clientfd, OK, "");
         
     }else{
         debug("user [%s] has already log in\n!", username);
         _send_msg(msg->clientfd, EUSREXISTS, "LOGIN error");
+        LogWrite(INFO, "User login denied ， named [%s] already in UserList", username);
     }
 }
 
@@ -380,6 +385,8 @@ void* process_Agent(void *params){
     free(params);
     info("created a new thread: pid %u tid %u (0x%x)\n",
         (unsigned int) getpid(), (unsigned int)pthread_self(), (unsigned int)pthread_self());
+    LogWrite(INFO, "created a new thread: pid %u tid %u (0x%x)",
+        (unsigned int) getpid(), (unsigned int)pthread_self(), (unsigned int)pthread_self());
 
     while(1){
         sem_wait(&full);
@@ -390,6 +397,9 @@ void* process_Agent(void *params){
         MessageData msg;
         remove_item(&msg);
         debug("Thread %d: Consumer consume %d,%s\n", msg.clientfd, msg.type, msg.mText);
+        LogWrite(INFO, "Removed a job in queue by thread: pid %u tid %u (0x%x)",
+            (unsigned int) getpid(), (unsigned int)pthread_self(), (unsigned int)pthread_self());
+
         pthread_mutex_lock(&RoomList_lock);
         switch(msg.type){
             case LOGIN:
@@ -442,6 +452,8 @@ void* process_Agent(void *params){
         sem_post(&mutex);
         sem_post(&empty);
     }
+    LogWrite(INFO, "destroy a thread: pid %u tid %u (0x%x)",
+        (unsigned int) getpid(), (unsigned int)pthread_self(), (unsigned int)pthread_self());
     pthread_exit(0);
     
 }
@@ -452,7 +464,8 @@ void *process_client(void *clientfd_ptr) {
 
     info("created a new thread: pid %u tid %u (0x%x)\n",
         (unsigned int) getpid(), (unsigned int)pthread_self(), (unsigned int)pthread_self());
-
+    LogWrite(INFO, "created a new thread: pid %u tid %u (0x%x)",
+        (unsigned int) getpid(), (unsigned int)pthread_self(), (unsigned int)pthread_self());
 
     int client_fd = *(int *)clientfd_ptr;
     free(clientfd_ptr);
@@ -497,6 +510,7 @@ void *process_client(void *clientfd_ptr) {
         printf("Receive message from client: %s\n", buffer);
         printf("Total number of received messages: %d\n", total_num_msg);
 
+        LogWrite(INFO, "Receive message [%s] from client [%d]", buffer, client_fd);
         
         // 发送消息到消息队列
         // message in queue 
@@ -512,6 +526,10 @@ void *process_client(void *clientfd_ptr) {
         /* critical section */
         //add a item
         insert_item(msg);
+
+        LogWrite(INFO, "Insert a new job in queue by thread: pid %u tid %u (0x%x)",
+            (unsigned int) getpid(), (unsigned int)pthread_self(), (unsigned int)pthread_self());
+
         debug("Thread %d: Producer produce %d,%s\n", msg.clientfd, msg.type, msg.mText);
 
         sem_post(&mutex);
@@ -523,24 +541,14 @@ void *process_client(void *clientfd_ptr) {
     // Close the socket at the end
     printf("Close current client connection\n");
     close(client_fd);
+
+    LogWrite(INFO, "destroy a thread: pid %u tid %u (0x%x)",
+        (unsigned int) getpid(), (unsigned int)pthread_self(), (unsigned int)pthread_self());
+
     pthread_exit(0);
     return NULL;
 }
 
-// manage collection
-void *manageCollection(void *params){
-
-    info("created a new thread: pid %u tid %u (0x%x)\n",
-        (unsigned int) getpid(), (unsigned int)pthread_self(), (unsigned int)pthread_self());
-
-    free(params);
-    while (1)
-    {
-        CheckConnection();  //检查连接状况
-        sleep(2);        //2s检查一次
-    }
-    return 0;
-}
 
 // 系统删除用户信息
 void removeClientBySystem(int clientfd){
@@ -570,40 +578,6 @@ void removeClientBySystem(int clientfd){
     info("User [%s] removed from UserList\n", client->userName);
     RemoveClient(UserList, client->userName);
 }
-
-/*
-* function 检查连接状态并关闭一个连接
-* return 返回值
-*/
-void CheckConnection()
-{
-    debug("CheckConnection\n");
-    pClient pclient = GetUserListNode();
-    pclient = pclient->next;
-    while (pclient != NULL)
-    {
-        if (_send_msg(pclient->sClient, OK, "") < 0)
-        {
-            info("Disconnect from UserName: %s\n", pclient->userName);
-            if (pclient->sClient != 0)
-            {
-                info("Disconnect from UserName: %s\n", pclient->userName);
-                // char error[128] = { 0 };   //发送下线消息给发消息的人
-                // sprintf(error, "The %s was downline.\n", pclient->userName);
-                // send(FindClient(pclient->ChatName), error, sizeof(error), 0);
-                removeClientBySystem(pclient->sClient);
-                // close socket
-                close(pclient->sClient);
-                break;
-            }
-        }else{
-            info("continue connected from UserName: %s\n", pclient->userName);
-        }
-        pclient = pclient->next;
-    }
-}
-
-
 
 
 void run_server(int server_port, int jobNum) {
@@ -640,7 +614,6 @@ void run_server(int server_port, int jobNum) {
     for(int i = 0; i < jobNum; ++i){
         pthread_create(&tid, &attr, process_Agent, NULL);
     }
-
 
     while (1) {
         // Wait and Accept the connection from client
@@ -685,6 +658,9 @@ int main(int argc, char *argv[]) {
             exit(EXIT_FAILURE);
         }
     }
+    // set log file name
+    strcpy(logFileName, argv[argc-1]);
+    debug("log file name: %s\n",  logFileName);
 
     if (port == 0) {
         fprintf(stderr, "ERROR: Port number for server to listen is not given\n");

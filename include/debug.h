@@ -13,7 +13,7 @@
 #define KWHT "\x1B[1;37m"
 #define KBWN "\x1B[0;33m"
 
-#ifdef DEBUG
+#ifdef _DEBUG
 #define fatal(S, ...)                                                       \
     fprintf(stderr, KRED "FATAL: %s:%s:%d " KNRM S, __FILE__, __FUNCTION__, \
             __LINE__, ##__VA_ARGS__); exit(EXIT_FAILURE);
